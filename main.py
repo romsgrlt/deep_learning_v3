@@ -16,13 +16,11 @@ criterion = torch.nn.CrossEntropyLoss(reduction='none')
 
 class Logger():
     def __init__(self):
-        self.file = open('logs/log.txt', 'w')
+        self.file = open('./logs/logs.txt', 'w+')
 
     def log(self, str):
         print(str)
-        self.file.write(str)
-
-    def flush(self):
+        self.file.write(str + "\n")
         self.file.flush()
 
     def __enter__(self):
@@ -147,7 +145,6 @@ def main():
         torch.cuda.empty_cache()
 
         if (n + 1) % 10 == 0:
-            logger.flush()
             torch.save(model.state_dict(), f'./logs/model_epoch_{n + 1}.pth')
             print(f"  modèle sauvegardé : ./logs/model_epoch_{n + 1}.pth")
 
