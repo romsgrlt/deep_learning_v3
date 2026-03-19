@@ -103,6 +103,9 @@ def log(label, n, avg_loss_per_group, avg_acc_per_group, logger):
 
 
 def main():
+    best = 0
+    index_best = 0
+
     os.makedirs('./logs', exist_ok=True)
 
     logger = Logger()
@@ -143,7 +146,17 @@ def main():
 
         torch.cuda.empty_cache()
 
-        if (n + 1) % 10 == 0:
+        worst_acc = min(avg_acc_per_group)
+
+        saved = False
+
+        if best < worst_acc:
+            torch.save(model.state_dict(), f'./logs/best_model_{index_best}_{n}.pth')
+            index_best += 1
+            best = worst_acc
+            saved = True
+
+        if not saved and (n + 1) % 10 == 0:
             torch.save(model.state_dict(), f'./logs/model_epoch_{n + 1}.pth')
             print(f"  modèle sauvegardé : ./logs/model_epoch_{n + 1}.pth")
 
