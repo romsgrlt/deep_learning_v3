@@ -30,6 +30,7 @@ class Logger():
         self.file.close()
 
 def train(data_loader, model, optimizer, q, device):
+    model.train()
     total_loss_per_group = torch.zeros(4).to(device)
     total_correct_per_group = torch.zeros(4).to(device)
     total_count_per_group = torch.zeros(4).to(device)
@@ -56,7 +57,7 @@ def train(data_loader, model, optimizer, q, device):
         q = q / q.sum()
 
         loss_final = (q * loss_per_group).sum()
-        l2 = sum(p.pow(2).sum() for p in model.parameters())
+        l2 = sum(p.pow(2).sum() for name, p in model.named_parameters() if 'bn' not in name and 'bias' not in name)
         loss_final = loss_final + weight_decay * l2
 
         loss_final.backward()
@@ -88,8 +89,6 @@ def eval(data_loader, model, device):
                     total_loss_per_group[group_index] += loss[mask].sum()
                     total_correct_per_group[group_index] += (predictions[mask] == y[mask]).sum()
                     total_count_per_group[group_index] += mask.sum()
-
-    model.train()
 
     avg_loss_per_group = (total_loss_per_group / total_count_per_group.clamp(min=1)).tolist()
     avg_acc_per_group = (total_correct_per_group / total_count_per_group.clamp(min=1)).tolist()
