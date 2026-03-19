@@ -6,10 +6,12 @@ from torchvision.models import resnet50
 import torch
 import os
 
-weight_decay = 0.01
+weight_decay = 1.0
 n_epoch = 300
 batch_size = 128
 dro_step = 0.01
+group_adj_C = 2
+lr = 0.00001
 
 criterion = torch.nn.CrossEntropyLoss(reduction='none')
 
@@ -29,11 +31,13 @@ class Logger():
     def __exit__(self, *args):
         self.file.close()
 
-def train(data_loader, model, optimizer, q, device):
+def train(data_loader, model, optimizer, q, group_counts, device):
     model.train()
     total_loss_per_group = torch.zeros(4).to(device)
     total_correct_per_group = torch.zeros(4).to(device)
     total_count_per_group = torch.zeros(4).to(device)
+
+    adjustments = group_adj_C / torch.sqrt(group_counts).to(device)
 
     for x, y, group in tqdm(data_loader):
         x, y, group = x.to(device), y.to(device), group.to(device)
@@ -53,7 +57,8 @@ def train(data_loader, model, optimizer, q, device):
                 total_correct_per_group[group_index] += (predictions[mask] == y[mask]).sum()
                 total_count_per_group[group_index] += mask.sum()
 
-        q = q.detach() * torch.exp(dro_step * loss_per_group.detach())
+        adjusted_loss = loss_per_group + adjustments
+        q = q.detach() * torch.exp(dro_step * adjusted_loss.detach())
         q = q / q.sum()
 
         loss_final = (q * loss_per_group).sum()
@@ -115,6 +120,9 @@ def main():
     val_data_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
     test_data_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
+    group_counts = torch.bincount(train_dataset.groups, minlength=4).float()
+    logger.log(f"Group counts: {group_counts.tolist()}")
+
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     model = resnet50(weights=None)
@@ -125,12 +133,12 @@ def main():
     model.fc = torch.nn.Linear(model.fc.in_features, 2)
     model = model.to(device)
 
-    optimizer = SGD(model.parameters(), lr=0.001, momentum=0.9)
+    optimizer = SGD(model.parameters(), lr=lr, momentum=0.9)
 
     q = (torch.ones(4) / 4).to(device)
 
     for n in range(n_epoch):
-        q, avg_loss_per_group, avg_acc_per_group = train(train_data_loader, model, optimizer, q, device)
+        q, avg_loss_per_group, avg_acc_per_group = train(train_data_loader, model, optimizer, q, group_counts, device)
         log("Train", n, avg_loss_per_group, avg_acc_per_group, logger)
         logger.log(f"  q        | " + " | ".join([f"g{i}: {q[i]:.4f}" for i in range(4)]))
 
@@ -141,13 +149,6 @@ def main():
 
         torch.cuda.empty_cache()
 
-        avg_loss_per_group, avg_acc_per_group = eval(test_data_loader, model, device)
-        log("Test", n, avg_loss_per_group, avg_acc_per_group, logger)
-
-        torch.cuda.empty_cache()
-
-        worst_acc = min(avg_acc_per_group)
-
         saved = False
 
         if best < worst_acc:
@@ -155,6 +156,13 @@ def main():
             index_best += 1
             best = worst_acc
             saved = True
+
+        avg_loss_per_group, avg_acc_per_group = eval(test_data_loader, model, device)
+        log("Test", n, avg_loss_per_group, avg_acc_per_group, logger)
+
+        torch.cuda.empty_cache()
+
+        worst_acc = min(avg_acc_per_group)
 
         if not saved and (n + 1) % 10 == 0:
             torch.save(model.state_dict(), f'./logs/model_epoch_{n + 1}.pth')
