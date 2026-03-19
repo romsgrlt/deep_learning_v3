@@ -151,6 +151,7 @@ def main():
 
         saved = False
 
+        worst_acc = min(avg_acc_per_group)
         if best < worst_acc:
             torch.save(model.state_dict(), f'./logs/best_model_{index_best}_{n}.pth')
             index_best += 1
@@ -162,7 +163,6 @@ def main():
 
         torch.cuda.empty_cache()
 
-        worst_acc = min(avg_acc_per_group)
 
         if not saved and (n + 1) % 10 == 0:
             torch.save(model.state_dict(), f'./logs/model_epoch_{n + 1}.pth')
