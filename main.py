@@ -6,12 +6,18 @@ from torchvision.models import resnet50
 import torch
 import os
 
-weight_decay = 1.0
+enable_dro = True
+dro_step = 0.01
+
+enable_adjustment = False
+generalization_adjustment = 2
+
+enable_regularization = False
+weight_decay = 1
+
 n_epoch = 300
 batch_size = 128
-dro_step = 0.01
-group_adj_C = 2
-lr = 0.00001
+lr = 0.001
 
 criterion = torch.nn.CrossEntropyLoss(reduction='none')
 
@@ -31,13 +37,14 @@ class Logger():
     def __exit__(self, *args):
         self.file.close()
 
+
 def train(data_loader, model, optimizer, q, group_counts, device):
     model.train()
     total_loss_per_group = torch.zeros(4).to(device)
     total_correct_per_group = torch.zeros(4).to(device)
     total_count_per_group = torch.zeros(4).to(device)
 
-    adjustments = group_adj_C / torch.sqrt(group_counts).to(device)
+    adjustments = generalization_adjustment / torch.sqrt(group_counts).to(device)
 
     for x, y, group in tqdm(data_loader):
         x, y, group = x.to(device), y.to(device), group.to(device)
@@ -57,15 +64,23 @@ def train(data_loader, model, optimizer, q, group_counts, device):
                 total_correct_per_group[group_index] += (predictions[mask] == y[mask]).sum()
                 total_count_per_group[group_index] += mask.sum()
 
-        adjusted_loss = loss_per_group + adjustments
-        q = q.detach() * torch.exp(dro_step * adjusted_loss.detach())
-        q = q / q.sum()
+        if enable_adjustment:
+            adjusted_loss = loss_per_group + adjustments
+        else:
+            adjusted_loss = loss_per_group
 
-        loss_final = (q * loss_per_group).sum()
-        l2 = sum(p.pow(2).sum() for name, p in model.named_parameters() if 'bn' not in name and 'bias' not in name)
-        loss_final = loss_final + weight_decay * l2
+        if enable_dro:
+            q = q.detach() * torch.exp(dro_step * adjusted_loss.detach())
+            q = q / q.sum()
+            loss = (q * loss_per_group).sum()
+        else:
+            loss = adjusted_loss.mean()
 
-        loss_final.backward()
+        if enable_regularization:
+            l2 = sum(p.pow(2).sum() for name, p in model.named_parameters() if 'bn' not in name and 'bias' not in name)
+            loss = loss + weight_decay * l2
+
+        loss.backward()
         optimizer.step()
 
     avg_loss_per_group = (total_loss_per_group / total_count_per_group.clamp(min=1)).tolist()
@@ -103,13 +118,14 @@ def eval(data_loader, model, device):
 
 def log(label, n, avg_loss_per_group, avg_acc_per_group, logger):
     logger.log(f"{label} [{n}]")
-    logger.log(f"  loss     | " + " | ".join([f"g{i}: {avg_loss_per_group[i]:.4f}" for i in range(4)]) + f" | avg: {sum(avg_loss_per_group)/4:.4f} | worst: {max(avg_loss_per_group):.4f}")
-    logger.log(f"  accuracy | " + " | ".join([f"g{i}: {avg_acc_per_group[i]:.4f}" for i in range(4)]) + f" | avg: {sum(avg_acc_per_group)/4:.4f} | worst: {min(avg_acc_per_group):.4f}")
+    logger.log(f"  loss     | " + " | ".join([f"g{i}: {avg_loss_per_group[i]:.4f}" for i in range(
+        4)]) + f" | avg: {sum(avg_loss_per_group) / 4:.4f} | worst: {max(avg_loss_per_group):.4f}")
+    logger.log(f"  accuracy | " + " | ".join([f"g{i}: {avg_acc_per_group[i]:.4f}" for i in range(
+        4)]) + f" | avg: {sum(avg_acc_per_group) / 4:.4f} | worst: {min(avg_acc_per_group):.4f}")
 
 
 def main():
     best = 0
-    index_best = 0
 
     os.makedirs('./logs', exist_ok=True)
 
@@ -153,8 +169,7 @@ def main():
 
         worst_acc = min(avg_acc_per_group)
         if best < worst_acc:
-            torch.save(model.state_dict(), f'./logs/best_model_{index_best}_{n}.pth')
-            index_best += 1
+            torch.save(model.state_dict(), './logs/best_model.pth')
             best = worst_acc
             saved = True
 
@@ -162,7 +177,6 @@ def main():
         log("Test", n, avg_loss_per_group, avg_acc_per_group, logger)
 
         torch.cuda.empty_cache()
-
 
         if not saved and (n + 1) % 10 == 0:
             torch.save(model.state_dict(), f'./logs/model_epoch_{n + 1}.pth')
