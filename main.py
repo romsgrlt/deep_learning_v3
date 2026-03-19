@@ -14,6 +14,23 @@ dro_step = 0.01
 criterion = torch.nn.CrossEntropyLoss(reduction='none')
 
 
+class Logger():
+    def __init__(self):
+        self.file = open('logs/log.txt', 'w')
+
+    def log(self, str):
+        print(str)
+        self.file.write(str)
+
+    def flush(self):
+        self.file.flush()
+
+    def __enter__(self):
+        pass
+
+    def __exit__(self, *args):
+        self.file.close()
+
 def train(data_loader, model, optimizer, q, device):
     total_loss_per_group = torch.zeros(4).to(device)
     total_correct_per_group = torch.zeros(4).to(device)
@@ -82,14 +99,16 @@ def eval(data_loader, model, device):
     return avg_loss_per_group, avg_acc_per_group
 
 
-def log(label, n, avg_loss_per_group, avg_acc_per_group):
-    print(f"{label} [{n}]")
-    print(f"  loss     | " + " | ".join([f"g{i}: {avg_loss_per_group[i]:.4f}" for i in range(4)]) + f" | avg: {sum(avg_loss_per_group)/4:.4f} | worst: {max(avg_loss_per_group):.4f}")
-    print(f"  accuracy | " + " | ".join([f"g{i}: {avg_acc_per_group[i]:.4f}" for i in range(4)]) + f" | avg: {sum(avg_acc_per_group)/4:.4f} | worst: {min(avg_acc_per_group):.4f}")
+def log(label, n, avg_loss_per_group, avg_acc_per_group, logger):
+    logger.log(f"{label} [{n}]")
+    logger.log(f"  loss     | " + " | ".join([f"g{i}: {avg_loss_per_group[i]:.4f}" for i in range(4)]) + f" | avg: {sum(avg_loss_per_group)/4:.4f} | worst: {max(avg_loss_per_group):.4f}")
+    logger.log(f"  accuracy | " + " | ".join([f"g{i}: {avg_acc_per_group[i]:.4f}" for i in range(4)]) + f" | avg: {sum(avg_acc_per_group)/4:.4f} | worst: {min(avg_acc_per_group):.4f}")
 
 
 def main():
     os.makedirs('./logs', exist_ok=True)
+
+    logger = Logger()
 
     train_dataset, val_dataset, test_dataset = load_dataset()
     train_data_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
@@ -111,25 +130,24 @@ def main():
     q = (torch.ones(4) / 4).to(device)
 
     for n in range(n_epoch):
-        print(f"\nEpoch [{n}]")
-
         q, avg_loss_per_group, avg_acc_per_group = train(train_data_loader, model, optimizer, q, device)
-        log("Train", n, avg_loss_per_group, avg_acc_per_group)
-        print(f"  q        | " + " | ".join([f"g{i}: {q[i]:.4f}" for i in range(4)]))
+        log("Train", n, avg_loss_per_group, avg_acc_per_group, logger)
+        logger.log(f"  q        | " + " | ".join([f"g{i}: {q[i]:.4f}" for i in range(4)]))
 
         torch.cuda.empty_cache()
 
         avg_loss_per_group, avg_acc_per_group = eval(val_data_loader, model, device)
-        log("Val", n, avg_loss_per_group, avg_acc_per_group)
+        log("Val", n, avg_loss_per_group, avg_acc_per_group, logger)
 
         torch.cuda.empty_cache()
 
         avg_loss_per_group, avg_acc_per_group = eval(test_data_loader, model, device)
-        log("Test", n, avg_loss_per_group, avg_acc_per_group)
+        log("Test", n, avg_loss_per_group, avg_acc_per_group, logger)
 
         torch.cuda.empty_cache()
 
         if (n + 1) % 10 == 0:
+            logger.flush()
             torch.save(model.state_dict(), f'./logs/model_epoch_{n + 1}.pth')
             print(f"  modèle sauvegardé : ./logs/model_epoch_{n + 1}.pth")
 
