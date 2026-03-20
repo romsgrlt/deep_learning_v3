@@ -1,0 +1,12 @@
+enable_dro = False
+dro_step = 0.01
+
+enable_adjustment = False
+generalization_adjustment = 2
+
+enable_regularization = True
+weight_decay = 0.1
+
+n_epoch = 300
+batch_size = 256
+lr = 0.0001
