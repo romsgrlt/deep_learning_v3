@@ -38,78 +38,53 @@ class Logger():
         self.file.close()
 
 
-def train(data_loader, model, optimizer, q, group_counts, device):
-    model.train()
+def train(data_loader, model, optimizer, q, group_counts, device, is_training = False):
+    model.train() if is_training else model.eval()
+
     total_loss_per_group = torch.zeros(4).to(device)
     total_correct_per_group = torch.zeros(4).to(device)
     total_count_per_group = torch.zeros(4).to(device)
 
     adjustments = generalization_adjustment / torch.sqrt(group_counts).to(device)
+    with torch.set_grad_enabled(is_training):
+        for x, y, group in tqdm(data_loader):
+            x, y, group = x.to(device), y.to(device), group.to(device)
 
-    for x, y, group in tqdm(data_loader):
-        x, y, group = x.to(device), y.to(device), group.to(device)
+            output = model(x)
 
-        optimizer.zero_grad()
-        output = model(x)
+            loss = criterion(output, y)
+            predictions = output.argmax(dim=1)
 
-        loss = criterion(output, y)
-        predictions = output.argmax(dim=1)
+            loss_per_group = torch.zeros(4).to(device)
+            for group_index in range(4):
+                mask = (group == group_index)
+                if mask.sum() > 0:
+                    loss_per_group[group_index] = loss[mask].mean()
+                    total_loss_per_group[group_index] += loss[mask].sum()
+                    total_correct_per_group[group_index] += (predictions[mask] == y[mask]).sum()
+                    total_count_per_group[group_index] += mask.sum()
 
-        loss_per_group = torch.zeros(4).to(device)
-        for group_index in range(4):
-            mask = (group == group_index)
-            if mask.sum() > 0:
-                loss_per_group[group_index] = loss[mask].mean()
-                total_loss_per_group[group_index] += loss[mask].sum()
-                total_correct_per_group[group_index] += (predictions[mask] == y[mask]).sum()
-                total_count_per_group[group_index] += mask.sum()
+            if enable_adjustment:
+                adjusted_loss = loss_per_group + adjustments
+            else:
+                adjusted_loss = loss_per_group
 
-        if enable_adjustment:
-            adjusted_loss = loss_per_group + adjustments
-        else:
-            adjusted_loss = loss_per_group
+            if enable_dro and q is not None:
+                q = q.detach() * torch.exp(dro_step * adjusted_loss.detach())
+                q = q / q.sum()
+                loss = (q * loss_per_group).sum()
+            else:
+                loss = adjusted_loss.mean()
 
-        if enable_dro:
-            q = q.detach() * torch.exp(dro_step * adjusted_loss.detach())
-            q = q / q.sum()
-            loss = (q * loss_per_group).sum()
-        else:
-            loss = adjusted_loss.mean()
-
-        loss.backward()
-        optimizer.step()
+            if is_training:
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
 
     avg_loss_per_group = (total_loss_per_group / total_count_per_group.clamp(min=1)).tolist()
     avg_acc_per_group = (total_correct_per_group / total_count_per_group.clamp(min=1)).tolist()
 
     return q, avg_loss_per_group, avg_acc_per_group
-
-
-def eval(data_loader, model, device):
-    model.eval()
-    total_loss_per_group = torch.zeros(4).to(device)
-    total_correct_per_group = torch.zeros(4).to(device)
-    total_count_per_group = torch.zeros(4).to(device)
-
-    with torch.no_grad():
-        for x, y, group in tqdm(data_loader):
-            x, y, group = x.to(device), y.to(device), group.to(device)
-
-            output = model(x)
-            loss = criterion(output, y)
-            predictions = output.argmax(dim=1)
-
-            for group_index in range(4):
-                mask = (group == group_index)
-                if mask.sum() > 0:
-                    total_loss_per_group[group_index] += loss[mask].sum()
-                    total_correct_per_group[group_index] += (predictions[mask] == y[mask]).sum()
-                    total_count_per_group[group_index] += mask.sum()
-
-    avg_loss_per_group = (total_loss_per_group / total_count_per_group.clamp(min=1)).tolist()
-    avg_acc_per_group = (total_correct_per_group / total_count_per_group.clamp(min=1)).tolist()
-
-    return avg_loss_per_group, avg_acc_per_group
 
 
 def log(label, n, avg_loss_per_group, avg_acc_per_group, logger):
@@ -150,13 +125,13 @@ def main():
     q = (torch.ones(4) / 4).to(device)
 
     for n in range(n_epoch):
-        q, avg_loss_per_group, avg_acc_per_group = train(train_data_loader, model, optimizer, q, group_counts, device)
+        q, avg_loss_per_group, avg_acc_per_group = train(train_data_loader, model, optimizer, q, group_counts, device, True)
         log("Train", n, avg_loss_per_group, avg_acc_per_group, logger)
         logger.log(f"  q        | " + " | ".join([f"g{i}: {q[i]:.4f}" for i in range(4)]))
 
         torch.cuda.empty_cache()
 
-        avg_loss_per_group, avg_acc_per_group = eval(val_data_loader, model, device)
+        _, avg_loss_per_group, avg_acc_per_group = train(val_data_loader, model, optimizer, None, group_counts, device)
         log("Val", n, avg_loss_per_group, avg_acc_per_group, logger)
 
         torch.cuda.empty_cache()
@@ -169,7 +144,7 @@ def main():
             best = worst_acc
             saved = True
 
-        avg_loss_per_group, avg_acc_per_group = eval(test_data_loader, model, device)
+        _, avg_loss_per_group, avg_acc_per_group = train(test_data_loader, model, optimizer, None, group_counts, device)
         log("Test", n, avg_loss_per_group, avg_acc_per_group, logger)
 
         torch.cuda.empty_cache()
