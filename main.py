@@ -13,7 +13,7 @@ enable_adjustment = False
 generalization_adjustment = 2
 
 enable_regularization = False
-weight_decay = 1
+weight_decay = 0.01
 
 n_epoch = 300
 batch_size = 128
@@ -75,10 +75,6 @@ def train(data_loader, model, optimizer, q, group_counts, device):
             loss = (q * loss_per_group).sum()
         else:
             loss = adjusted_loss.mean()
-
-        if enable_regularization:
-            l2 = sum(p.pow(2).sum() for name, p in model.named_parameters() if 'bn' not in name and 'bias' not in name)
-            loss = loss + weight_decay * l2
 
         loss.backward()
         optimizer.step()
@@ -149,7 +145,7 @@ def main():
     model.fc = torch.nn.Linear(model.fc.in_features, 2)
     model = model.to(device)
 
-    optimizer = SGD(model.parameters(), lr=lr, momentum=0.9)
+    optimizer = SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay= weight_decay if enable_regularization else 0)
 
     q = (torch.ones(4) / 4).to(device)
 
