@@ -9,22 +9,23 @@ import os
 enable_dro = True
 dro_step = 0.01
 
-enable_adjustment = False
-generalization_adjustment = 2
+enable_adjustment = True
 
-enable_regularization = False
-weight_decay = 0.01
+enable_regularization = True
+weight_decay = 1.0
 
 n_epoch = 300
 batch_size = 128
-lr = 0.001
+lr = 0.00001
 
 criterion = torch.nn.CrossEntropyLoss(reduction='none')
 
 
-class Logger():
-    def __init__(self):
-        self.file = open('./logs/logs.txt', 'w+')
+class Logger:
+
+    def __init__(self, index=None):
+        suffix = '' if index is None else f'_{index}'
+        self.file = open(f'./logs/logs{suffix}.txt', 'w+')
 
     def log(self, str):
         print(str)
@@ -38,7 +39,7 @@ class Logger():
         self.file.close()
 
 
-def train(data_loader, model, optimizer, q, group_counts, device, is_training = False):
+def train(data_loader, model, optimizer, q, group_counts, device, generalization_adjustment, is_training=False):
     model.train() if is_training else model.eval()
 
     total_loss_per_group = torch.zeros(4).to(device)
@@ -96,11 +97,7 @@ def log(label, n, avg_loss_per_group, avg_acc_per_group, logger):
 
 
 def main():
-    best = 0
-
     os.makedirs('./logs', exist_ok=True)
-
-    logger = Logger()
 
     train_dataset, val_dataset, test_dataset = load_dataset()
     train_data_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
@@ -108,50 +105,57 @@ def main():
     test_data_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
     group_counts = torch.bincount(train_dataset.groups, minlength=4).float()
-    logger.log(f"Group counts: {group_counts.tolist()}")
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    model = resnet50(weights=None)
-    state_dict = torch.hub.load_state_dict_from_url(
-        'https://download.pytorch.org/models/resnet50-19c8e357.pth'
-    )
-    model.load_state_dict(state_dict)
-    model.fc = torch.nn.Linear(model.fc.in_features, 2)
-    model = model.to(device)
+    for i in range(5):
+        logger = Logger(i)
+        generalization_adjustment = i
+        best = 0
+        model = resnet50(weights=None)
+        state_dict = torch.hub.load_state_dict_from_url(
+            'https://download.pytorch.org/models/resnet50-19c8e357.pth'
+        )
+        model.load_state_dict(state_dict)
+        model.fc = torch.nn.Linear(model.fc.in_features, 2)
+        model = model.to(device)
 
-    optimizer = SGD(model.parameters(), lr=lr, momentum=0.9, weight_decay= weight_decay if enable_regularization else 0)
+        optimizer = SGD(model.parameters(), lr=lr, momentum=0.9,
+                        weight_decay=weight_decay if enable_regularization else 0)
 
-    q = (torch.ones(4) / 4).to(device)
+        q = (torch.ones(4) / 4).to(device)
 
-    for n in range(n_epoch):
-        q, avg_loss_per_group, avg_acc_per_group = train(train_data_loader, model, optimizer, q, group_counts, device, True)
-        log("Train", n, avg_loss_per_group, avg_acc_per_group, logger)
-        logger.log(f"  q        | " + " | ".join([f"g{i}: {q[i]:.4f}" for i in range(4)]))
+        for n in range(n_epoch):
+            q, avg_loss_per_group, avg_acc_per_group = train(train_data_loader, model, optimizer, q, group_counts,
+                                                             device, generalization_adjustment, True)
+            log("Train", n, avg_loss_per_group, avg_acc_per_group, logger)
+            logger.log(f"  q        | " + " | ".join([f"g{i}: {q[i]:.4f}" for i in range(4)]))
 
-        torch.cuda.empty_cache()
+            torch.cuda.empty_cache()
 
-        _, avg_loss_per_group, avg_acc_per_group = train(val_data_loader, model, optimizer, None, group_counts, device)
-        log("Val", n, avg_loss_per_group, avg_acc_per_group, logger)
+            _, avg_loss_per_group, avg_acc_per_group = train(val_data_loader, model, optimizer, None, group_counts,
+                                                             device, generalization_adjustment, )
+            log("Val", n, avg_loss_per_group, avg_acc_per_group, logger)
 
-        torch.cuda.empty_cache()
+            torch.cuda.empty_cache()
 
-        saved = False
+            saved = False
 
-        worst_acc = min(avg_acc_per_group)
-        if best < worst_acc:
-            torch.save(model.state_dict(), './logs/best_model.pth')
-            best = worst_acc
-            saved = True
+            worst_acc = min(avg_acc_per_group)
+            if best < worst_acc:
+                torch.save(model.state_dict(), f'./logs/best_model_{i}.pth')
+                best = worst_acc
+                saved = True
 
-        _, avg_loss_per_group, avg_acc_per_group = train(test_data_loader, model, optimizer, None, group_counts, device)
-        log("Test", n, avg_loss_per_group, avg_acc_per_group, logger)
+            _, avg_loss_per_group, avg_acc_per_group = train(test_data_loader, model, optimizer, None, group_counts,
+                                                             device, generalization_adjustment, )
+            log("Test", n, avg_loss_per_group, avg_acc_per_group, logger)
 
-        torch.cuda.empty_cache()
+            torch.cuda.empty_cache()
 
-        if not saved and (n + 1) % 10 == 0:
-            torch.save(model.state_dict(), f'./logs/model_epoch_{n + 1}.pth')
-            print(f"  modèle sauvegardé : ./logs/model_epoch_{n + 1}.pth")
+            # if not saved and (n + 1) % 10 == 0:
+            #    torch.save(model.state_dict(), f'./logs/model_epoch_{n + 1}.pth')
+            #    print(f"  modèle sauvegardé : ./logs/model_epoch_{n + 1}.pth")
 
 
 if __name__ == '__main__':
