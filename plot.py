@@ -99,4 +99,5 @@ def main(log_dir):
 
 
 if __name__ == '__main__':
-    main('logs/3.1/high/ERM')
+    for i in range(5):
+        main(f'logs/adjustments/{i}')
