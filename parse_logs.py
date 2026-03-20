@@ -98,8 +98,8 @@ def write_csv(rows, path, has_adv_probs=False):
     print(f"Écrit : {path} ({len(rows)} lignes)")
 
 
-def main(log_dir):
-    train_rows, val_rows, test_rows = parse_logs(f'{log_dir}/logs.txt')
+def main(log_dir, i):
+    train_rows, val_rows, test_rows = parse_logs(f'{log_dir}/logs_{i}.txt')
 
     train_last_row = train_rows[len(train_rows) - 1]
     train_weighted_avg_acc = (train_last_row['acc_g0'] * 3498 + train_last_row['acc_g1'] * 184 + train_last_row[
@@ -140,4 +140,5 @@ def main(log_dir):
 
 
 if __name__ == '__main__':
-    main('logs/3.1/low/ERM')
+    for i in range(5):
+        main(f'logs/adjustments/{i}', i)
