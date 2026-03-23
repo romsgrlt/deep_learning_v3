@@ -1,4 +1,6 @@
-# Distributionally Robust Neural Networks for Group Shifts: On the Importance of Regularization for Worst-Case Generalization
+# Ce README est celui du repository original du projet group_dro, ce repertoire contient une refonte intégrale du code existant 
+
+## Distributionally Robust Neural Networks for Group Shifts: On the Importance of Regularization for Worst-Case Generalization
 
 This code implements the group DRO algorithm from the following paper:
 
